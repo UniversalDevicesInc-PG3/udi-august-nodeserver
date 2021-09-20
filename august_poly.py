@@ -5,7 +5,7 @@ This is a NodeServer for August written by automationgeek (Jean-Francois Trembla
 based on the NodeServer template for Polyglot v2 written in Python2/3 by Einstein.42 (James Milne) milne.james@gmail.com
 """
 
-import polyinterface
+import udi_interface
 import hashlib
 import uuid
 import time
@@ -18,26 +18,15 @@ from august.authenticator import Authenticator, AuthenticationState, ValidationR
 from august.lock import LockDetail, LockDoorStatus, LockStatus
 
 
-LOGGER = polyinterface.LOGGER
-SERVERDATA = json.load(open('server.json'))
-VERSION = SERVERDATA['credits'][0]['version']
+LOGGER = udi_interface.LOGGER
+Custom = udi_interface.Custom
 
-def get_profile_info(logger):
-    pvf = 'profile/version.txt'
-    try:
-        with open(pvf) as f:
-            pv = f.read().replace('\n', '')
-    except Exception as err:
-        logger.error('get_profile_info: failed to read  file {0}: {1}'.format(pvf,err), exc_info=True)
-        pv = 0
-    f.close()
-    return { 'version': pv }
+class Controller(udi_interface.node):
 
-class Controller(polyinterface.Controller):
-
-    def __init__(self, polyglot):
-        super(Controller, self).__init__(polyglot)
+    def __init__(self, polyglot, primary, address, name):
+        super(Controller, self).__init__(polyglot, primary, address, name)
         self.name = 'August'
+        self.poly = polyglot
         self.queryON = False
         self.email = ""
         self.password = ""
@@ -49,36 +38,44 @@ class Controller(polyinterface.Controller):
         self.authentication = None
         self.userDictEnable = False
 
-    def start(self):
-        LOGGER.info('Started August for v2 NodeServer version %s', str(VERSION))
-        self.setDriver('ST', 1)
+        self.CustomData = Custom(polyglot, 'customdata')
+
+        polyglot.subscribe(polyglot.START, self.start, address)
+        polyglot.subscribe(polyglot.CUSTOMPARAMS, self.parameterHandler)
+        polyglot.subscribe(polyglot.POLL, self.shortPoll)
+
+        polyglot.read()
+        polyglot.addNode(self)
+
+    def parameterHandler(self, params):
         try:
-            if 'email' in self.polyConfig['customParams']:
-                self.email = self.polyConfig['customParams']['email']
+            if 'email' in params:
+                self.email = params['email']
             else:
                 self.email = ""
                 
-            if 'password' in self.polyConfig['customParams']:
-                self.password = self.polyConfig['customParams']['password']
+            if 'password' in params:
+                self.password = params['password']
             else:
                 self.password = ""
             
             # Generate a UUID ( 11111111-1111-1111-1111-111111111111 )
-            if 'install_id' in self.polyConfig['customParams']:
-                self.install_id = self.polyConfig['customParams']['install_id']
+            if 'install_id' in params:
+                self.install_id = params['install_id']
             else:
+                # FIXME: this saves in custom data but never queries custom data
                 self.install_id = str(uuid.uuid4())
-                self.saveCustomData({ 'install_id': self.install_id })
+                self.CustomData['install_id'] = self.install_id
                 LOGGER.debug('UUID Generated: {}'.format(self.install_id))
 
-            if 'tokenFilePath' in self.polyConfig['customParams']:
-                self.tokenFilePath = self.polyConfig['customParams']['tokenFilePath']
+            if 'tokenFilePath' in params:
+                self.tokenFilePath = params['tokenFilePath']
             else:
                 self.tokenFilePath = ""
             
             # {'John Doe': 1, 'Paul Doe':2}
-            if 'userDict' in self.polyConfig['customParams']:
-                self.userDict = self.polyConfig['customParams']['userDict']
+            if 'userDict' in params:
+                self.userDict = params['userDict']
                 self.userDictEnable = True
             else:
                 self.userDict = "{'None': 0}"
@@ -87,27 +84,32 @@ class Controller(polyinterface.Controller):
                 LOGGER.error('August requires email,password,tokenFilePath parameters to be specified in custom configuration.')
                 return False
             else:
-                self.check_profile()
                 self.discover()
 
         except Exception as ex:
             LOGGER.error('Error starting August NodeServer: %s', str(ex))
+
+    def start(self):
+        LOGGER.info('Started August for v2 NodeServer version %s', str(VERSION))
+        self.setDriver('ST', 1)
+        self.poly.updateProfile()
+        self.poly.setCustomParamsDoc()
     
     def query(self):
-        for node in self.nodes:
-            self.nodes[node].reportDrivers()
+        for node in self.poly.nodes():
+            node.reportDrivers()
     
-    def shortPoll(self):
-        self.setDriver('ST', 1)
-        for node in self.nodes:
-            if  self.nodes[node].queryON == True :
-                self.nodes[node].update()
-
-    def longPoll(self):
-        self.heartbeat()
+    def poll(self, pollflag):
+        if 'shortPoll' in pollflag:
+            self.setDriver('ST', 1)
+            for node in self.poly.nodes():
+                if  node.queryON == True :
+                    node.update()
+        else:
+            self.heartbeat()
         
-        # Refresh Token
-        self.authenticator.refresh_access_token()
+            # Refresh Token
+            self.authenticator.refresh_access_token()
 
     def heartbeat(self):
         LOGGER.debug('heartbeat: hb={}'.format(self.hb))
@@ -128,7 +130,7 @@ class Controller(polyinterface.Controller):
             locks = self.api.get_locks(self.authentication.access_token)
             for lock in locks:
                 myhash =  str(int(hashlib.md5(lock.device_id.encode('utf8')).hexdigest(), 16) % (10 ** 8))
-                self.addNode(AugustLock(self,self.address,myhash,  "lock_" + str(count),self.api, self.authentication, lock ))
+                self.poly.addNode(AugustLock(self.poly,self.address,myhash,  "lock_" + str(count),self.api, self.authentication, lock ))
                 count = count + 1
         else :
             self.authenticator.send_verification_code()
@@ -137,26 +139,6 @@ class Controller(polyinterface.Controller):
     def delete(self):
         LOGGER.info('Deleting August')
 
-    def check_profile(self):
-        self.profile_info = get_profile_info(LOGGER)
-        # Set Default profile version if not Found
-        cdata = deepcopy(self.polyConfig['customData'])
-        LOGGER.info('check_profile: profile_info={0} customData={1}'.format(self.profile_info,cdata))
-        if not 'profile_info' in cdata:
-            cdata['profile_info'] = { 'version': 0 }
-        if self.profile_info['version'] == cdata['profile_info']['version']:
-            self.update_profile = False
-        else:
-            self.update_profile = True
-            self.poly.installprofile()
-        LOGGER.info('check_profile: update_profile={}'.format(self.update_profile))
-        cdata['profile_info'] = self.profile_info
-        self.saveCustomData(cdata)
-
-    def install_profile(self,command):
-        LOGGER.info("install_profile:")
-        self.poly.installprofile()
-        
     def send_validation_code(self,command) :
         LOGGER.info("Send Validation Code")
         val = int(command.get('value'))
@@ -175,23 +157,22 @@ class Controller(polyinterface.Controller):
     commands = {
         'QUERY': query,
         'DISCOVER': discover,
-        'INSTALL_PROFILE': install_profile,
         'VALIDATE_CODE': send_validation_code,
     }
     drivers = [{'driver': 'ST', 'value': 1, 'uom': 2}, 
                {'driver': 'GV3', 'value': 0, 'uom': 56}]
 
-class AugustLock(polyinterface.Node):
+class AugustLock(udi_interface.Node):
 
-    def __init__(self, controller, primary, address, name, api, authentication, lock):
+    def __init__(self, polyglot, primary, address, name, api, authentication, lock):
 
-        super(AugustLock, self).__init__(controller, primary, address, name)
+        super(AugustLock, self).__init__(polyglot, primary, address, name)
         self.queryON = True
         self.api = api
         self.authentication = authentication
         self.lock = lock
-        self.userDictEnable = self.parent.userDictEnable
-        self.userDict = ast.literal_eval(self.parent.userDict)
+        self.userDictEnable = self.primary.userDictEnable
+        self.userDict = ast.literal_eval(self.primary.userDict)
 
     def start(self):
         self.setDriver('GV2', 101)
@@ -257,9 +238,9 @@ class AugustLock(polyinterface.Node):
 
 if __name__ == "__main__":
     try:
-        polyglot = polyinterface.Interface('AugustNodeServer')
+        polyglot = udi_interface.Interface([])
         polyglot.start()
-        control = Controller(polyglot)
-        control.runForever()
+        Controller(polyglot, 'controller', 'controller', 'AugustNodeServer')
+        polyglot.runForever()
     except (KeyboardInterrupt, SystemExit):
         sys.exit(0)
