@@ -21,7 +21,7 @@ from august.lock import LockDetail, LockDoorStatus, LockStatus
 LOGGER = udi_interface.LOGGER
 Custom = udi_interface.Custom
 
-class Controller(udi_interface.node):
+class Controller(udi_interface.Node):
 
     def __init__(self, polyglot, primary, address, name):
         super(Controller, self).__init__(polyglot, primary, address, name)
