@@ -173,8 +173,9 @@ class AugustLock(udi_interface.Node):
         self.api = api
         self.authentication = authentication
         self.lock = lock
-        self.userDictEnable = False #self.primary.userDictEnable
-        self.userDict = "{'None': 0}" # ast.literal_eval(self.primary.userDict)
+        self.parent = controller.getNode(primary)
+        self.userDictEnable = self.parent.userDictEnable
+        self.userDict = ast.literal_eval(self.parent.userDict)
 
     def start(self):
         self.setDriver('GV2', 101)
