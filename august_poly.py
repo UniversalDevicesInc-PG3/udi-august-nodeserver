@@ -242,8 +242,6 @@ if __name__ == "__main__":
     try:
         polyglot = udi_interface.Interface([])
         polyglot.start()
-        polyglot.updateProfile()
-        polyglot.setCustomParamsDoc()
         Controller(polyglot, 'controller', 'controller', 'AugustNodeServer')
         polyglot.runForever()
     except (KeyboardInterrupt, SystemExit):
