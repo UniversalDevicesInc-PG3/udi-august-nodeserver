@@ -19,6 +19,8 @@ from august.lock import LockDetail, LockDoorStatus, LockStatus
 
 
 LOGGER = udi_interface.LOGGER
+SERVERDATA = json.load(open('server.json'))
+VERSION = SERVERDATA['credits'][0]['version']
 Custom = udi_interface.Custom
 
 class Controller(udi_interface.Node):
@@ -90,7 +92,7 @@ class Controller(udi_interface.Node):
             LOGGER.error('Error starting August NodeServer: %s', str(ex))
 
     def start(self):
-        LOGGER.info('Started August for v2 NodeServer version %s', str(VERSION))
+        LOGGER.info('Started August for v3 NodeServer version %s', str(VERSION))
         self.setDriver('ST', 1)
         self.poly.updateProfile()
         self.poly.setCustomParamsDoc()
